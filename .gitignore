@@ -1,0 +1,11 @@
+# Precompiled python
+*.pyc
+
+# Clion
+.idea
+
+# Vagrant
+.vagrant
+
+# Build output
+build

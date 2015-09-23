@@ -1,0 +1,8 @@
+find_path(CATCH_INCLUDE_DIR
+    NAMES catch.hpp
+    PATHS "${CMAKE_CURRENT_LIST_DIR}/catch"
+    NO_DEFAULT_PATH
+)
+set(CATCH_INCLUDE_DIRS ${CATCH_INCLUDE_DIR})
+
+mark_as_advanced(CATCH_INCLUDE_DIR)
