@@ -1,11 +1,23 @@
-# Precompiled python
+# C++ objects and libs
+*.slo
+*.lo
+*.o
+*.a
+*.la
+*.lai
+*.so
+*.dll
+*.dylib
+
+# Python
 *.pyc
 
-# Clion
+# CLion
 .idea
 
 # Vagrant
 .vagrant
 
-# Build output
-build
+# Project Specific
+*.log
+.*

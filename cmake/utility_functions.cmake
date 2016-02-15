@@ -1,28 +1,42 @@
-# Copyright (C) 2015 Christopher Gilbert
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-
-cmake_minimum_required(VERSION 2.8.12)
+cmake_minimum_required(VERSION 2.8.11)
 
 ### build up utility functions
 include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
+
+function(GitVersion _var)
+    if(NOT GIT_FOUND)
+        find_package(Git QUIET)
+    endif()
+    if(NOT GIT_FOUND)
+        set(${_var} "GIT-NOTFOUND" PARENT_SCOPE)
+        return()
+    endif()
+    set(format_params "'date : %ci, hash : %H'")
+    execute_process(
+        COMMAND
+            "${GIT_EXECUTABLE}" show -s --format=${format_params} HEAD
+        WORKING_DIRECTORY
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+        RESULT_VARIABLE
+            res
+        OUTPUT_VARIABLE
+            out
+        ERROR_QUIET
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT res EQUAL 0)
+        set(out "${out}-${res}-NOTFOUND")
+    endif()
+    set(${_var} "${out}" PARENT_SCOPE)
+endfunction()
+
+function(GenerateVersionInfo outvar)
+    GitVersion(GIT_VERSION)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/.version.h.in ${CMAKE_CURRENT_BINARY_DIR}/.version.h)
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/.version.cpp.in ${CMAKE_CURRENT_BINARY_DIR}/.version.cpp)
+    set(${outvar} ${CMAKE_CURRENT_BINARY_DIR}/.version.cpp PARENT_SCOPE)
+endfunction()
 
 function(CheckCFlags outvar)
     foreach(flag ${ARGN})
@@ -82,8 +96,52 @@ function(MakeCopyFileDepenency outvar file)
     set(${outvar} ${_output} PARENT_SCOPE)
 endfunction()
 
+function(SetupCoverage target type)
+    if (COVERAGE)
+        if (NOT LCOV_PATH)
+            find_program(LCOV_PATH lcov)
+        endif()
+        if (NOT LCOV_PATH)
+            message(FATAL_ERROR "unable to find lcov!")
+            return()
+        endif()
+        if (NOT GENHTML_PATH)
+            find_program(GENHTML_PATH genhtml)
+        endif()
+        if (NOT GENHTML_PATH)
+            message(FATAL_ERROR "unable to find genhtml!")
+            return()
+        endif()
+        set_target_properties(${target}
+            PROPERTIES
+                COMPILE_FLAGS
+                    "${CMAKE_CXX_FLAGS} -g -O0 -fprofile-arcs -ftest-coverage"
+                LINK_FLAGS
+                    "-fprofile-arcs"
+        )
+        if(type STREQUAL "test")
+            add_custom_target(${target}_coverage
+                # cleanup lcov
+                ${LCOV_PATH} --directory . --zerocounters
+                # run tests
+                COMMAND $<TARGET_FILE:${name}>
+                # capture lcov counters and generate report
+                COMMAND ${LCOV_PATH} --directory . --capture --output-file ${target}_coverage.info
+                COMMAND ${LCOV_PATH} --remove ${target}_coverage.info ${target}_coverage.info.cleaned
+                COMMAND ${GENHTML_PATH} -o ${target}_coverage ${target}_coverage.info.cleaned
+                COMMAND ${CMAKE_COMMAND} -E remove ${target}_coverage.info ${target}_coverage.info.cleaned
+                WORKING_DIRECTORY
+                    ${CMAKE_BINARY_DIR}
+                COMMENT
+                    "Processing code coverage counters and generating report"
+            )
+        endif()
+    endif()
+endfunction()
+
 # magic function to handle the power functions below
 function(_BuildDynamicTarget name type)
+    GenerateVersionInfo(_version_file)
     set(_mode "files")
     foreach(dir ${ARGN})
         if(dir STREQUAL "EXCLUDE")
@@ -200,7 +258,7 @@ function(_BuildDynamicTarget name type)
                         PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/${dir}
                     )
                 else()
-                    message(FATAL_ERROR "could not find refix header")
+                    message(FATAL_ERROR "could not find prefix header")
                 endif()
             elseif(_mode STREQUAL "dirs")
                 if (dir STREQUAL ".")
@@ -221,9 +279,7 @@ function(_BuildDynamicTarget name type)
                         ${dir}/*.inl
                         ${dir}/*.m
                         ${dir}/*.mm
-                    )
-                    file(GLOB_RECURSE _test_files RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
-                        ${dir}/*.test.cpp
+                        ${dir}/*.proto
                     )
                 else()
                     file(GLOB _files RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
@@ -236,9 +292,7 @@ function(_BuildDynamicTarget name type)
                         ${dir}/*.inl
                         ${dir}/*.m
                         ${dir}/*.mm
-                    )
-                    file(GLOB _test_files RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
-                        ${dir}/*.test.cpp
+                        ${dir}/*.proto
                     )
                 endif()
                 if(_files)
@@ -246,18 +300,20 @@ function(_BuildDynamicTarget name type)
                         ${_files}
                     )
                 endif()
-                if(_source_files AND _test_files)
-                    list(REMOVE_ITEM _source_files ${_test_files})
-                endif()
             # simple copy files
             elseif(_mode STREQUAL "copyfiles")
-                MakeCopyFileDepenency(_copyfile_target
-                    ${dir}
-                )
-                list(APPEND _source_files
-                    ${_copyfile_target}
-                )
-                unset(_copyfile_target)
+                file(GLOB_RECURSE _files RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${dir})
+                foreach(_file ${_files})
+                    set(_output ${CMAKE_CURRENT_BINARY_DIR}/${_file})
+                    MakeCopyFileDepenency(_copyfile
+                        ${_file}
+                        ${_output}
+                    )
+                    list(APPEND _source_files
+                        ${_copyfile}
+                    )
+                    unset(_copyfile)
+                endforeach()
             else()
                 message(FATAL_ERROR "Unknown Mode ${_mode}")
             endif()
@@ -266,9 +322,20 @@ function(_BuildDynamicTarget name type)
     if (NOT _source_files)
         message(FATAL_ERROR "Could not find any sources for ${name}")
     endif()
-    if (NOT _test_files)
-        message(WARNING "Could not find any tests for ${name}")
-    endif()
+    foreach(_file ${_source_files})
+        get_filename_component(_file_ext ${_file} EXT)
+        string(TOLOWER ${_file_ext} _file_ext)
+        if(${_file_ext} MATCHES ".proto")
+            list(REMOVE_ITEM _source_files
+                ${_file}
+            )
+            PROTOBUF_GENERATE_CPP(_proto_src _proto_hdr ${_file})
+            list(APPEND _source_files
+                ${_proto_src} ${_proto_hdr}
+            )
+        endif()
+    endforeach()
+    list(APPEND _source_files ${_version_file})
     if(_reference)
         list(APPEND _source_files ${_reference})
         set_source_files_properties(${_reference}
@@ -296,6 +363,11 @@ function(_BuildDynamicTarget name type)
         add_executable(${name}
             ${_source_files}
         )
+    elseif(type STREQUAL "test")
+        add_executable(${name}
+            ${_source_files}
+        )
+        add_test(NAME ${name} COMMAND $<TARGET_FILE:${name}>)
     else()
         add_executable(${name} MACOSX_BUNDLE WIN32
             ${_source_files}
@@ -325,38 +397,7 @@ function(_BuildDynamicTarget name type)
             ${_properties}
         )
     endif()
-    if(_test_files)
-        foreach(_test_file ${_test_files})
-            get_filename_component(_test_name ${_test_file} NAME_WE)
-            set(_test_name "${_test_name}_test")
-            add_executable(${_test_name} ${_test_file})
-            if(_include_dirs)
-                _SetDefaultScope(_include_dirs PRIVATE)
-                target_include_directories(${_test_name} ${_include_dirs})
-            endif()
-            if(_definitions)
-                _SetDefaultScope(_definitions PRIVATE)
-                target_compile_definitions(${_test_name} ${_definitions})
-            endif()
-            if(_features)
-                _SetDefaultScope(_features PRIVATE)
-                target_compile_features(${_test_name} ${_features})
-            endif()
-            if(_link_libs)
-                target_link_libraries(${_test_name} ${_link_libs})
-            endif()
-            if(_flags)
-                _SetDefaultScope(_flags PRIVATE)
-                target_compile_options(${_test_name} ${_flags})
-            endif()
-            if(_properties)
-                set_target_properties(${_test_name} PROPERTIES
-                    ${_properties}
-                )
-            endif()
-            add_test(NAME ${_test_name} COMMAND $<TARGET_FILE:${_test_name}>)
-        endforeach()
-    endif()
+    SetupCoverage(${name} ${type})
 endfunction()
 
 ## These two power functions build up library and program targets
@@ -406,150 +447,6 @@ function(CreateTool name)
     _BuildDynamicTarget(${name} tool ${ARGN})
 endfunction()
 
-## Helper functions to copy libs
-function(_CleanGeneratorExpressions var out_var debug_opt_var)
-    set(debug_opt "")
-    set(clean ${var})
-    if (var MATCHES "\\$<")
-        string(REGEX REPLACE "^\\$<.+>?:(.+)>$" "\\1" clean ${var})
-        string(REGEX REPLACE "^\\$<(.+>?):.+>$" "\\1" condition ${var})
-        if (condition STREQUAL "$<CONFIG:DEBUG>")
-            set(debug_opt "debug")
-        elseif(condition STREQUAL "$<NOT:$<CONFIG:DEBUG>>")
-            set(debug_opt "optimized")
-        endif()
-    endif()
-    set(${debug_opt_var} ${debug_opt} PARENT_SCOPE)
-    set(${out_var} ${clean} PARENT_SCOPE)
-endfunction()
-
-function(FindLinkedLibs target libs)
-    get_target_property(lib_list ${target} INTERFACE_LINK_LIBRARIES)
-    if(NOT lib_list)
-        return()
-    endif()
-
-    #message(STATUS "Checking ${target} :: ${lib_list}")
-    if (ARGV2 GREATER "0")
-        set(_extra ON)
-        math(EXPR level "${ARGV2} - 1")
-    endif()
-
-    foreach (lib ${lib_list})
-        _CleanGeneratorExpressions(${lib} lib debug_opt)
-        get_filename_component(ext ${lib} EXT)
-        if(ext)
-            string(SUBSTRING ${ext} 1 -1 ext2)
-            get_filename_component(ext2 "${ext2}" EXT)
-            if(ext2)
-                set(ext ${ext2})
-            endif()
-        endif()
-        if(TARGET ${lib})
-            if(_extra)
-                FindLinkedLibs(${lib} shared_libs ${level})
-            endif()
-        elseif(ext STREQUAL ".framework" OR ext STREQUAL CMAKE_SHARED_LIBRARY_SUFFIX OR ext STREQUAL CMAKE_IMPORT_LIBRARY_SUFFIX)
-            if(debug_opt)
-                list(APPEND shared_libs ${debug_opt})
-            endif()
-            list(APPEND shared_libs ${lib})
-        else()
-#            message(STATUS "Skipping ${lib} -- ${ext}")
-        endif()
-    endforeach()
-
-#    message(STATUS "Target: ${target} Shared: ${shared_libs}")
-    set(${libs} ${shared_libs} PARENT_SCOPE)
-endfunction()
-
-function(CopyDependentLibs target)
-    set(_mode "lib")
-
-    FindLinkedLibs(${target} __libs 2)
-    list(APPEND _libs ${__libs})
-
-    foreach(entry ${ARGN})
-        if(entry STREQUAL "TARGETS")
-            set(_mode "targets")
-        elseif(entry STREQUAL "EXTRA_LIBS")
-            set(_mode "extra")
-        else()
-            if(_mode STREQUAL "targets")
-                FindLinkedLibs(${entry} __libs 2)
-                list(APPEND _libs ${__libs})
-                set(__libs)
-            elseif(_mode STREQUAL "lib")
-                list(APPEND _libs ${entry})
-            elseif(_mode STREQUAL "extra")
-                list(APPEND _extra_libs ${entry})
-            else()
-                message(FATAL_ERROR "Unknown mode ${_mode}")
-            endif()
-        endif()
-    endforeach()
-
-
-    # we don't sort extralibs as it may have debug;optimized entries in it
-
-    # Fetch library rpath relative directory from global properties
-    get_property(lib_rpath_dir GLOBAL PROPERTY LIBRARY_RPATH_DIRECTORY)
-    if(NOT lib_rpath_dir)
-        set(lib_rpath_dir "")
-    endif()
-
-    set(_SCRIPT_FILE "${CMAKE_CURRENT_BINARY_DIR}/${target}_copylibs.cmake")
-    file(WRITE ${_SCRIPT_FILE}
-        "# Generated Script file\n"
-        "include(GetPrerequisites)\n"
-        "set(source_libs \"${_libs}\")\n"
-        "set(extra_libs \"${_extra_libs}\")\n"
-        "\n"
-        "set(executable \"\${BUNDLE_APP}\")\n"
-        "get_filename_component(executable_dir \"\${executable}\" DIRECTORY)\n"
-        "get_prerequisites(\${executable} lib_list 1 0 \"\" \"\")\n"
-        "set(dest \${executable_dir}/\${LIB_RPATH_DIR})\n"
-        "file(MAKE_DIRECTORY \${dest})\n"
-        "set(_skipreq OFF)\n"
-        "foreach(lib \${lib_list} \${extra_libs})\n"
-        "  if(_skipreq)\n"
-        "    set(_skipreq OFF)\n"
-        "  elseif( (lib STREQUAL \"debug\" AND NOT USE_DEBUG) OR (lib STREQUAL \"optimized\" AND USE_DEBUG) )\n"
-        "    set(_skipreq ON)\n"
-        "  elseif( (lib STREQUAL \"debug\" AND USE_DEBUG) OR (lib STREQUAL \"optimized\" AND NOT USE_DEBUG) )\n"
-        "    # Splitting based on debug/optimized\n"
-        "  else()\n"
-        "    get_filename_component(lib_file \"\${lib}\" NAME)\n"
-        "    set(_skip OFF)\n"
-        "    foreach(slib \${source_libs} \${extra_libs})\n"
-        "      if(_skip)\n"
-        "        set(_skip OFF)\n"
-        "      elseif( (slib STREQUAL \"debug\" AND NOT USE_DEBUG) OR (slib STREQUAL \"optimized\" AND USE_DEBUG) )\n"
-        "        set(_skip ON)\n"
-        "      elseif( (slib STREQUAL \"debug\" AND USE_DEBUG) OR (slib STREQUAL \"optimized\" AND NOT USE_DEBUG) )\n"
-        "        # Splitting based on debug/optimized\n"
-        "      else()\n"
-        "        get_filename_component(slib_file \"\${slib}\" NAME)\n"
-        "        if(lib_file STREQUAL slib_file)\n"
-        "          message(STATUS \"Copying library: \${lib_file}\")\n"
-        "          execute_process(COMMAND \${CMAKE_COMMAND} -E copy \"\${slib}\" \"\${dest}\")\n"
-        "          break()\n"
-        "        else()\n"
-        "          get_filename_component(slib_dir \"\${slib}\" PATH)\n"
-        "          set(slib_path \"\${slib_dir}/\${lib_file}\")\n"
-        "          if(EXISTS \${slib_path})\n"
-        "            message(STATUS \"Copying library: \${lib_file}\")\n"
-        "            execute_process(COMMAND \${CMAKE_COMMAND} -E copy \"\${slib_path}\" \"\${dest}\")\n"
-        "            break()\n"
-        "          endif()\n"
-        "        endif()\n"
-        "      endif()\n" # _skip
-        "    endforeach()\n" # source lib scan
-        "  endif()\n" # _skipreq
-        "endforeach()\n" # required libs
-    )
-    ADD_CUSTOM_COMMAND(TARGET ${target}
-        POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -DBUNDLE_APP="$<TARGET_FILE:${target}>" -DLIB_RPATH_DIR="${lib_rpath_dir}" -DUSE_DEBUG=$<CONFIG:Debug> -P "${_SCRIPT_FILE}"
-    )
+function(CreateTest name)
+    _BuildDynamicTarget(${name} test ${ARGN})
 endfunction()

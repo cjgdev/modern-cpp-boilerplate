@@ -8,7 +8,7 @@ for x in "$@"; do
     TEMP_BIN="`mktemp /tmp/clang-analyze.bin.XXXXX`"
 
     # analyze
-    clang --analyze "$@" -o "${TEMP_BIN}" 2> "${TEMP_OUT}"
+    clang++ --analyze "$@" -o "${TEMP_BIN}" 2> "${TEMP_OUT}"
 
     RESULT=0
     [ "$?" == 0 ] || RESULT=1
@@ -25,4 +25,4 @@ for x in "$@"; do
 done
 
 # compile real code
-clang "$@"
+clang++ "$@"

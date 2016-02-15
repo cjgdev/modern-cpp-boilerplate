@@ -1,0 +1,75 @@
+cmake_minimum_required(VERSION 2.8.11)
+project(@PROJECT_NAME@)
+
+### Pull in boilerplate cmake
+set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(boilerplate)
+include(utility_functions)
+
+### Find system libraries
+find_package(Threads)
+
+### Vendor / third-party libraries
+set(GTEST_INCLUDE_DIRS "/opt/gtest-1.7.0b/include")
+set(GMOCK_INCLUDE_DIRS "/opt/gmock-1.7.0b/include")
+set(GTEST_LIBRARIES    "/opt/gtest-1.7.0b/lib/libgtest.a")
+set(GMOCK_LIBRARIES    "/opt/gmock-1.7.0b/lib/libgmock.a")
+
+set(Boost_INCLUDE_DIRS     "")
+set(LOG4CXX_INCLUDE_DIRS   "")
+set(ZMQ_INCLUDE_DIRS       "")
+
+set(Boost_LIBRARIES        "boost_program_options;boost_system;boost_thread")
+set(LOG4CXX_LIBRARIES      "log4cxx")
+set(ZMQ_LIBRARIES          "zmq")
+
+### Setup service
+
+CreateProgram(@PROJECT_NAME@
+    DIRS
+        src/**
+    INCLUDES
+        PUBLIC
+            src
+            ${Boost_INCLUDE_DIRS}
+            ${LOG4CXX_INCLUDE_DIRS}
+            ${ZMQ_INCLUDE_DIRS}
+        PRIVATE
+    DEFINES
+        PUBLIC
+            $<$<CONFIG:Debug>:__BUILD_DEV__>
+            $<$<CONFIG:Release>:__BUILD_PROD__>
+            $<$<CONFIG:DebWithRel>:__BUILD_PROF__>
+    LINK
+        ${CMAKE_THREAD_LIBS_INIT}
+        ${Boost_LIBRARIES}
+        ${LOG4CXX_LIBRARIES}
+        ${ZMQ_LIBRARIES}
+    PROPERTIES
+        FOLDER lib
+)
+
+### Setup tests
+
+CreateTest(@PROJECT_NAME@_unit_tests
+    DIRS
+        test/**
+    INCLUDES
+        PUBLIC
+        PRIVATE
+            ${GTEST_INCLUDE_DIRS}
+            ${GMOCK_INCLUDE_DIRS}
+    DEFINES
+        PUBLIC
+            $<$<CONFIG:Debug>:__BUILD_DEV__>
+            $<$<CONFIG:Release>:__BUILD_PROD__>
+            $<$<CONFIG:DebWithRel>:__BUILD_PROF__>
+    LINK
+        @PROJECT_NAME@
+        ${GMOCK_LIBRARIES}
+        ${GTEST_LIBRARIES}
+    PROPERTIES
+        FOLDER bin
+    COPY_FILES
+        resources/**
+)

@@ -1,35 +1,10 @@
-# Copyright (C) 2015 DataSift Ltd.
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-
 import datetime
 import sys
-import time
-
-perf_counter_available = (sys.version_info.minor >= 3)
+import timeit
 
 class Job:
   def __init__(self, job_name):
-    if perf_counter_available:
-      self.start = time.perf_counter()
-    else:
-      self.start = 0
+    self.start = timeit.default_timer()
     self.job_name = job_name
     self.stopped = False
 
@@ -37,10 +12,7 @@ class Job:
     if self.stopped:
       sys.exit('Already stopped')
     self.stopped = True
-    if perf_counter_available:
-      self.total = time.perf_counter() - self.start
-    else:
-      self.total = 0
+    self.total = timeit.default_timer() - self.start
 
   def result(self):
     if not self.stopped:
@@ -68,9 +40,6 @@ class Timer:
     self.jobs[-1].stop()
 
   def result(self):
-    if not perf_counter_available:
-      print('timer.perf_counter is not available (update to python 3.3+)')
-      return
     for i in self.jobs:
       i.result()
     print('-')
